@@ -9,17 +9,23 @@ CONFIG = {
     'gemini': ('GEMINI_API_KEY', 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'),
     'openrouter': ('OPENROUTER_API_KEY', 'https://openrouter.ai/api/v1/chat/completions'),
     'anthropic': ('ANTHROPIC_API_KEY', 'https://api.anthropic.com/v1/messages'),
+    'xkiro': ('XKIRO_API_KEY', 'https://api.xkiro.com/v1/chat/completions'),
 }
 
 
 def post_json(url, headers, payload):
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json', **headers})
+    all_headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) StatusAgentLab/1.0', **headers}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=all_headers)
     try:
         with urllib.request.urlopen(req, timeout=60) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
-        # Do not print response bodies: they may contain account or request data.
-        raise RuntimeError(f'Provider trả HTTP {exc.code}; kiểm tra model, key và quota.') from exc
+        detail = ''
+        try:
+            detail = f" - Chi tiết: {exc.read().decode('utf-8', errors='ignore')[:300]}"
+        except Exception:
+            pass
+        raise RuntimeError(f'Provider trả HTTP {exc.code}; kiểm tra model, key và quota.{detail}') from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f'Không kết nối được provider: {exc.reason}') from exc
 
@@ -37,7 +43,7 @@ class Provider:
             raise ValueError('Cần đặt MODEL là model có hỗ trợ tool calling.')
         self.name, self.model = name, model
         key_name, self.url = CONFIG[name]
-        self.key = os.getenv(key_name)
+        self.key = os.getenv(key_name) or (os.getenv('OPENAI_API_KEY') if name == 'xkiro' else None)
         if not self.key:
             raise ValueError(f'Thiếu {key_name}; xem README.md.')
 
@@ -47,7 +53,10 @@ class Provider:
         payload = {'model': self.model, 'messages': messages}
         if schemas:
             payload['tools'] = schemas
-        data = post_json(self.url, {'Authorization': f'Bearer {self.key}'}, payload)
+        headers = {'Authorization': f'Bearer {self.key}'}
+        if self.name == 'xkiro':
+            headers['x-api-key'] = self.key
+        data = post_json(self.url, headers, payload)
         choice = data['choices'][0]
         message = choice['message']
         calls = [{'id': c['id'], 'name': c['function']['name'], 'arguments': c['function']['arguments']} for c in message.get('tool_calls', [])]
